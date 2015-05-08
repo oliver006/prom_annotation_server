@@ -1,8 +1,9 @@
 package main
 
 import (
-	"fmt"
 	"errors"
+	"fmt"
+	"log"
 	"strings"
 )
 
@@ -10,6 +11,7 @@ type Storage interface {
 	Add(a Annotation) error
 	Posts(tagsFilter []string, r, until int) (res Posts, err error)
 	Close()
+	Cleanup() // after tests
 }
 
 type Annotation struct {
@@ -28,11 +30,16 @@ func NewStorage(config string) (Storage, error) {
 		return nil, errors.New("invalid config format")
 	}
 
+	log.Printf("trying storage config: %s", config)
 	switch parts[0] {
 	case "local":
 		{
 			return NewBoltDBStorage(parts[1])
 		}
+	case "rethinkdb":
+		{
+			return NewRethinkDBStorage(parts[1])
+		}
 	}
-	return nil, errors.New(fmt.Sprintf("invalid config, type \"%s\" not supported", parts[0]))
+	return nil, fmt.Errorf("invalid config, type \"%s\" not supported", parts[0])
 }

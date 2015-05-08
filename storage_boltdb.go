@@ -1,10 +1,11 @@
 package main
 
 import (
-	"log"
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"log"
+	"os"
 	"time"
 
 	"github.com/boltdb/bolt"
@@ -12,6 +13,7 @@ import (
 
 type BoltDBStorage struct {
 	seqVal int
+	fName  string
 	db     *bolt.DB
 }
 
@@ -20,7 +22,7 @@ func NewBoltDBStorage(n string) (*BoltDBStorage, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &BoltDBStorage{db: db}, err
+	return &BoltDBStorage{db: db, fName: n}, err
 }
 
 func (s *BoltDBStorage) seq() int {
@@ -103,4 +105,9 @@ func (s *BoltDBStorage) ListForTag(tag string, r, until int, out *[]Annotation) 
 func (s *BoltDBStorage) Close() {
 	s.db.Close()
 	log.Printf("Closed BoltDB storage")
+}
+
+func (s *BoltDBStorage) Cleanup() {
+	s.Close()
+	os.Remove(s.fName)
 }
