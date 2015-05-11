@@ -30,6 +30,21 @@ func (s *BoltDBStorage) seq() int {
 	return s.seqVal
 }
 
+func (s *BoltDBStorage) TagStats() (TagStats, error) {
+
+	var res TagStats = make(map[string]int)
+	s.db.View(func(tx *bolt.Tx) error {
+		tx.ForEach(func(name []byte, b *bolt.Bucket) error {
+			stats := b.Stats()
+			res[string(name)] += stats.KeyN
+			return nil
+		})
+		return nil
+	})
+
+	return res, nil
+}
+
 func (s *BoltDBStorage) Add(a Annotation) error {
 	// make a copy of a and skip the tags, we don't need them in the DB
 	val, _ := json.Marshal(Annotation{CreatedAt: a.CreatedAt, Message: a.Message})

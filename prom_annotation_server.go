@@ -6,8 +6,10 @@ package main
 */
 
 import (
+	"encoding/json"
 	"flag"
 	"fmt"
+	"io/ioutil"
 	"log"
 	"net/http"
 	"os"
@@ -15,11 +17,10 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/gin-gonic/gin"
-	"github.com/gin-gonic/gin/binding"
+	"github.com/prometheus/client_golang/prometheus"
 )
 
-const VERSION = "0.2"
+const VERSION = "0.3"
 
 var (
 	/*
@@ -28,56 +29,24 @@ var (
 		currently only "local" is available for storage type
 		for rethinkdb use this format: rethinkdb:<HOST:PORT>/<DBNAME>
 	*/
-	storageConfig = flag.String("storage", "local:/tmp/annotations.db", "Storage config, format is \"type:options\". \"local\" is currently the only supported type with options being the location of the DB file.")
-	listenAddress = flag.String("listen-addr", ":9119", "Address to listen on for web interface")
-	endpoint      = flag.String("endpoint", "/annotations", "Path under which to expose the annotation server")
-	showVersion   = flag.Bool("version", false, "Show version information")
+	storageConfig   = flag.String("storage", "local:/tmp/annotations.db", "Storage config, format is \"type:options\". \"local\" and \"rethinkdb\" are currently the only supported types.")
+	listenAddress   = flag.String("listen-addr", ":9119", "Address to listen on for web interface")
+	annoEndpoint    = flag.String("endpoint", "/annotations", "Path under which to expose the annotation server")
+	metricsEndpoint = flag.String("metris", "/metrics", "Path under which to expose the metrics of the annotation server")
+	showVersion     = flag.Bool("version", false, "Show version information")
 )
 
 type ServerContext struct {
-	storage Storage
-	router  http.Handler
+	storage         Storage
+	annotationStats *prometheus.GaugeVec
 }
 
-func (s *ServerContext) put(c *gin.Context) {
-	var a Annotation
-	if ok := c.BindWith(&a, binding.JSON); ok && a.Message != "" && len(a.Tags) > 0 {
-		if a.CreatedAt == 0 {
-			a.CreatedAt = int(time.Now().Unix())
-		}
+func newAnnotationStats() *prometheus.GaugeVec {
 
-		if err := s.storage.Add(a); err == nil {
-			c.JSON(200, map[string]string{"result": "ok"})
-			return
-		}
-	}
-
-	log.Printf("unmarshal annotion error or mad bad data")
-	c.JSON(200, map[string]string{"result": "invalid_json"})
-	return
-}
-
-func (s *ServerContext) get(c *gin.Context) {
-	c.Request.ParseForm()
-
-	r, err := strconv.Atoi(c.Request.Form.Get("range"))
-	if err != nil || r == 0 {
-		r = 3600
-	}
-
-	until, err := strconv.Atoi(c.Request.Form.Get("until"))
-	if err != nil || until == 0 {
-		until = int(time.Now().Unix())
-	}
-	tags, _ := c.Request.Form["tags[]"]
-
-	list, err := s.storage.Posts(tags, r, until)
-	if err != nil {
-		c.JSON(200, map[string]string{"result": fmt.Sprintf("err: %s", err)})
-		return
-	}
-
-	c.JSON(200, list)
+	return prometheus.NewGaugeVec(prometheus.GaugeOpts{
+		Name: "annotations_total",
+		Help: "Number of annotations per tag.",
+	}, []string{"tag"})
 }
 
 func NewServerContext(storage string) (*ServerContext, error) {
@@ -86,13 +55,110 @@ func NewServerContext(storage string) (*ServerContext, error) {
 	if err != nil {
 		return nil, err
 	}
-	srvr := ServerContext{storage: st}
-
-	r := gin.Default()
-	r.GET(*endpoint, srvr.get)
-	r.PUT(*endpoint, srvr.put)
-	srvr.router = r
+	srvr := ServerContext{
+		storage:         st,
+		annotationStats: newAnnotationStats(),
+	}
+	prometheus.MustRegister(&srvr)
 	return &srvr, nil
+}
+
+func (s *ServerContext) ServeHTTP(w http.ResponseWriter, req *http.Request) {
+
+	log.Printf("Request: %s  %s", req.Method, req.URL.Path)
+
+	switch req.URL.Path {
+	case *metricsEndpoint:
+		prometheus.Handler().ServeHTTP(w, req)
+	case *annoEndpoint:
+		prometheus.InstrumentHandlerFunc("annotations", s.annotations)(w, req)
+	default:
+		http.Error(w, "Not found", 404)
+	}
+}
+
+func (s *ServerContext) Describe(ch chan<- *prometheus.Desc) {
+	s.annotationStats.Describe(ch)
+}
+
+func (s *ServerContext) Collect(ch chan<- prometheus.Metric) {
+	s.annotationStats = newAnnotationStats()
+	defer s.annotationStats.Collect(ch)
+
+	stats, err := s.storage.TagStats()
+	if err != nil {
+		log.Printf("stats err: %s")
+		return
+	}
+
+	for tag, count := range stats {
+		s.annotationStats.WithLabelValues(tag).Set(float64(count))
+	}
+}
+
+func (s *ServerContext) writeJSON(w http.ResponseWriter, code int, data interface{}) {
+	w.WriteHeader(code)
+	w.Header().Set("Content-Type", "application/json")
+	temp, _ := json.Marshal(data)
+	fmt.Fprintln(w, string(temp))
+}
+
+func (s *ServerContext) annotations(w http.ResponseWriter, req *http.Request) {
+
+	switch req.Method {
+
+	case "GET":
+		s.get(w, req)
+
+	case "PUT":
+		s.put(w, req)
+
+	default:
+		http.Error(w, "Not supported", 405)
+	}
+}
+
+func (s *ServerContext) put(w http.ResponseWriter, req *http.Request) {
+
+	defer req.Body.Close()
+	body, _ := ioutil.ReadAll(req.Body)
+	var a Annotation
+	if err := json.Unmarshal(body, &a); err == nil {
+		if a.CreatedAt == 0 {
+			a.CreatedAt = int(time.Now().Unix())
+		}
+
+		if err := s.storage.Add(a); err == nil {
+			s.writeJSON(w, 200, map[string]string{"result": "ok"})
+			return
+		}
+	}
+
+	log.Printf("unmarshal annotion error or mad bad data: %s", body)
+	s.writeJSON(w, 500, map[string]string{"result": "invalid_json"})
+}
+
+func (s *ServerContext) get(w http.ResponseWriter, req *http.Request) {
+	req.ParseForm()
+
+	r, err := strconv.Atoi(req.Form.Get("range"))
+	if err != nil || r == 0 {
+		r = 3600
+	}
+
+	until, err := strconv.Atoi(req.Form.Get("until"))
+	if err != nil || until == 0 {
+		until = int(time.Now().Unix())
+	}
+	tags, _ := req.Form["tags[]"]
+
+	list, err := s.storage.Posts(tags, r, until)
+	if err != nil {
+		s.writeJSON(w, 500, map[string]string{"result": fmt.Sprintf("err: %s", err)})
+		return
+	}
+
+	s.writeJSON(w, 200, list)
 }
 
 func main() {
@@ -108,15 +174,10 @@ func main() {
 	}
 	defer ctx.storage.Close()
 
-	s := &http.Server{
-		Addr:           *listenAddress,
-		Handler:        ctx.router,
-		ReadTimeout:    5 * time.Second,
-		WriteTimeout:   5 * time.Second,
-		MaxHeaderBytes: 1 << 20,
-	}
+	http.Handle("/", ctx)
+
 	log.Printf("Running server listening at %s, ", *listenAddress)
-	go s.ListenAndServe()
+	go http.ListenAndServe(*listenAddress, nil)
 
 	c := make(chan os.Signal, 1)
 	signal.Notify(c, os.Interrupt)

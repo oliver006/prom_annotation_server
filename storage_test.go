@@ -12,22 +12,23 @@ import (
 func TestStorageConfig(t *testing.T) {
 
 	// first, invalid ones
-	invalid := []string{"INVALID", "INVALID:1234", "local:/proc/123.db", ""}
+	invalid := []string{"INVALID", "INVALID:1234", "local:/proc/123.db", "", "rethinkdb:localhost:28015"}
 	for _, opt := range invalid {
-		_, err := NewStorage(opt)
+		s, err := NewStorage(opt)
 		if err == nil {
 			t.Errorf("terrible: %s", err)
+			s.Cleanup()
 		}
 	}
 
-	// valid
+	// now the valid ones
 	valid := []string{"local:/tmp/123.db", "local:./test-123.db", "rethinkdb:localhost:28015/annotations"}
 	for _, opt := range valid {
 		s, err := NewStorage(opt)
 		if err != nil {
 			t.Errorf("terrible: %s", err)
 		} else {
-			s.Close()
+			s.Cleanup()
 		}
 	}
 }

@@ -69,7 +69,6 @@ Adding a new storage provider is easy. I you're interested in adding a new stora
 
 - some sort of tag management endpoint would be nice to support deleting of tags
 - more storage providers
-- make the annotation server export its own set of metrics
 - ...
 
 

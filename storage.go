@@ -3,13 +3,15 @@ package main
 import (
 	"errors"
 	"fmt"
-	"log"
 	"strings"
 )
+
+type TagStats map[string]int
 
 type Storage interface {
 	Add(a Annotation) error
 	Posts(tagsFilter []string, r, until int) (res Posts, err error)
+	TagStats() (TagStats, error)
 	Close()
 	Cleanup() // after tests
 }
@@ -30,7 +32,6 @@ func NewStorage(config string) (Storage, error) {
 		return nil, errors.New("invalid config format")
 	}
 
-	log.Printf("trying storage config: %s", config)
 	switch parts[0] {
 	case "local":
 		{

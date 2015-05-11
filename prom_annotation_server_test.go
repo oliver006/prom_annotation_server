@@ -10,6 +10,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/prometheus/client_golang/prometheus"
 )
 
 /*
@@ -18,9 +20,9 @@ import (
 */
 
 type TestSetup struct {
-	ServerURL string
-	T         *testing.T
-	Ctx       *ServerContext
+	T      *testing.T
+	Ctx    *ServerContext
+	Server *httptest.Server
 }
 
 func NewSetup(t *testing.T, storageConfig string) *TestSetup {
@@ -29,21 +31,24 @@ func NewSetup(t *testing.T, storageConfig string) *TestSetup {
 		log.Fatalf(err.Error())
 	}
 
-	server := httptest.NewServer(ctx.router)
+	server := httptest.NewServer(ctx)
 	s := &TestSetup{
-		Ctx:       ctx,
-		T:         t,
-		ServerURL: fmt.Sprintf("%s/annotations", server.URL),
+		Ctx:    ctx,
+		T:      t,
+		Server: server,
 	}
 	return s
 }
 
 func (s *TestSetup) put(msg, tag string, ts int) error {
-	return s.putJSON(fmt.Sprintf(`{"created_at": %d, "message": "%s", "tags": ["%s"]}`, ts, msg, tag))
+	if ts == 0 {
+		ts = int(time.Now().Unix())
+	}
+	return s.putJSON(fmt.Sprintf(`{"created_at": %d, "message": "%s", "tags": ["%s"]}`, ts, msg, tag), 200)
 }
 
-func (s *TestSetup) putJSON(msg string) error {
-	request, err := http.NewRequest("PUT", s.ServerURL, strings.NewReader(msg))
+func (s *TestSetup) putJSON(msg string, expectedStatus int) error {
+	request, err := http.NewRequest("PUT", s.Server.URL+"/annotations", strings.NewReader(msg))
 	res, err := http.DefaultClient.Do(request)
 	if err != nil {
 		return err
@@ -51,15 +56,19 @@ func (s *TestSetup) putJSON(msg string) error {
 
 	txt, err := ioutil.ReadAll(res.Body)
 	res.Body.Close()
-	if res.StatusCode != 200 || !strings.HasPrefix(string(txt), `{"result":"ok"`) {
-		s.T.Errorf("Expected code of 200, not: %d      txt: %s", res.StatusCode, txt)
+	if res.StatusCode != expectedStatus {
+		s.T.Errorf("Expected code of %d, not: %d      txt: %s", expectedStatus, res.StatusCode, txt)
+		return fmt.Errorf("Expected code of %d, not: %d      txt: %s", expectedStatus, res.StatusCode, txt)
 	}
-
 	return err
 }
 
 func (s *TestSetup) query(tag string, ts int) (p Posts, err error) {
-	queryURL := fmt.Sprintf("%s?until=%d&range=3600&tags[]=%s", s.ServerURL, ts, tag)
+	queryURL := fmt.Sprintf("%s/annotations?until=%d&range=3600&tags[]=%s", s.Server.URL, ts, tag)
+	return s.queryURL(queryURL)
+}
+
+func (s *TestSetup) queryURL(queryURL string) (p Posts, err error) {
 	res, err := http.Get(queryURL)
 	if err != nil {
 		s.T.Errorf("err: %s", err)
@@ -84,8 +93,7 @@ func (s *TestSetup) query(tag string, ts int) (p Posts, err error) {
 	return
 }
 
-func (s *TestSetup) TestServerAddAndQuery(t *testing.T) {
-
+func (s *TestSetup) testAddAndQuery(t *testing.T) {
 	ts := int(time.Now().Unix())
 	if err := s.put("msg1", "tag1", ts-1); err != nil {
 		t.Error(err)
@@ -105,15 +113,15 @@ func (s *TestSetup) TestServerAddAndQuery(t *testing.T) {
 	}
 }
 
-func (s *TestSetup) TestServerDefaultValues(t *testing.T) {
-
+func (s *TestSetup) testDefaultValues(t *testing.T) {
 	tsLow := int(time.Now().Unix())
-	if err := s.putJSON(`{"message": "test2", "tags": ["ts-test"]}`); err != nil {
+	if err := s.putJSON(`{"message": "test2", "tags": ["defaults"]}`, 200); err != nil {
 		t.Error(err)
 	}
 	tsHigh := int(time.Now().Unix())
 
-	l, err := s.query("ts-test", tsHigh)
+	queryURL := fmt.Sprintf("%s/annotations?tags[]=%s", s.Server.URL, "defaults")
+	l, err := s.queryURL(queryURL)
 	if err != nil || len(l.Posts) != 1 {
 		t.Errorf("err: %s or Wrong len(l.Posts): %#v", err, l.Posts)
 		return
@@ -124,19 +132,100 @@ func (s *TestSetup) TestServerDefaultValues(t *testing.T) {
 	}
 }
 
-func TestServer(t *testing.T) {
+func (s *TestSetup) testBrokenJSON(t *testing.T) {
+	if err := s.putJSON(`{ BROKEN_JSON }`, 500); err != nil {
+		t.Error("This shouldn't have failed")
+	}
+}
 
+func (s *TestSetup) testTagStats(t *testing.T) {
+	statsPre, _ := s.Ctx.storage.TagStats()
+
+	if err := s.put("msg1", "tag1", 0); err != nil {
+		t.Error(err)
+	}
+	if err := s.put("msg1", "tag2", 0); err != nil {
+		t.Error(err)
+	}
+	if err := s.put("msg1", "tag2", 0); err != nil {
+		t.Error(err)
+	}
+
+	statsPost, _ := s.Ctx.storage.TagStats()
+
+	if statsPre["NOT-SET"] != 0 || statsPost["NOT-SET"] != 0 || statsPre["tag1"] != statsPost["tag1"]-1 || statsPre["tag2"] != statsPost["tag2"]-2 {
+		t.Errorf("no good, stats counts not as expected")
+		return
+	}
+}
+
+func (s *TestSetup) testMetrics(t *testing.T) {
+	if err := s.put("msg1", "tag1", 0); err != nil {
+		t.Error(err)
+	}
+
+	queryURL := fmt.Sprintf("%s%s", s.Server.URL, *metricsEndpoint)
+	res, err := http.Get(queryURL)
+	if err != nil {
+		s.T.Errorf("err: %s", err)
+		return
+	}
+
+	body, err := ioutil.ReadAll(res.Body)
+	res.Body.Close()
+	if err != nil {
+		s.T.Errorf("err: %s", err)
+		return
+	}
+	if !strings.Contains(string(body), "http_requests_total") {
+		t.Errorf("missing http_requests_total from metrics")
+	}
+
+	if err := s.put("msg1", "tag2", 0); err != nil {
+		t.Error(err)
+	}
+
+	res, err = http.Get(queryURL)
+	if err != nil {
+		s.T.Errorf("err: %s", err)
+		return
+	}
+	body, err = ioutil.ReadAll(res.Body)
+	res.Body.Close()
+	if err != nil {
+		s.T.Errorf("err: %s", err)
+		return
+	}
+
+	if !strings.Contains(string(body), `http_requests_total{code="200",handler="annotations",method="put"}`) {
+		t.Errorf(`missing "http_requests_total{code="200",handler="annotations",method="put"}" from metrics`)
+	}
+
+	if !strings.Contains(string(body), `annotations_total{tag="tag2"}`) {
+		t.Errorf(`missing "annotations_total{tag="tag2"}" from metrics`)
+	}
+}
+
+func TestServer(t *testing.T) {
 	ts := int(time.Now().Unix())
-	storageToTest := []string{fmt.Sprintf("local:./test-%d.db", ts), fmt.Sprintf("rethinkdb:localhost:28015/annotst%d", ts)}
+	storageToTest := []string{
+		fmt.Sprintf("local:./test-%d.db", ts),
+		fmt.Sprintf("rethinkdb:localhost:28015/annotst%d", ts),
+	}
 
 	for _, storage := range storageToTest {
-
-		log.Printf("storage: %s", storage)
+		log.Printf("testing storage: %s", storage)
 
 		s := NewSetup(t, storage)
-		defer s.Ctx.storage.Cleanup()
 
-		s.TestServerAddAndQuery(t)
-		s.TestServerDefaultValues(t)
+		s.testAddAndQuery(t)
+		s.testDefaultValues(t)
+		s.testTagStats(t)
+		s.testBrokenJSON(t)
+		s.testMetrics(t)
+
+		s.Server.Close()
+		s.Ctx.storage.Cleanup()
+		prometheus.Unregister(s.Ctx)
 	}
 }

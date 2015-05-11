@@ -12,15 +12,13 @@ import (
 */
 
 func TestBoltAnnotationAdd(t *testing.T) {
-
 	ts := int(time.Now().Unix())
 	s, err := NewBoltDBStorage(fmt.Sprintf("./test-%d.db", ts))
-	defer s.Cleanup()
 	if err != nil {
 		t.Errorf("no good: %s", err)
 		return
 	}
-	defer s.Close()
+	defer s.Cleanup()
 
 	a := Annotation{CreatedAt: ts, Message: "Test message", Tags: []string{"tag1", "tag2"}}
 
@@ -38,15 +36,13 @@ func TestBoltAnnotationAdd(t *testing.T) {
 }
 
 func TestBoltGetList(t *testing.T) {
-
 	ts := int(time.Now().Unix())
 	s, err := NewBoltDBStorage(fmt.Sprintf("./test-%d.db", ts))
-	defer s.Cleanup()
 	if err != nil {
 		t.Errorf("no good: %s", err)
 		return
 	}
-	defer s.Close()
+	defer s.Cleanup()
 
 	s.Add(Annotation{CreatedAt: ts, Message: "Test message", Tags: []string{"tag1", "tag2"}})
 	s.Add(Annotation{CreatedAt: ts, Message: "Test message", Tags: []string{"tag2", "tag3"}})
@@ -78,15 +74,13 @@ func TestBoltGetList(t *testing.T) {
 }
 
 func TestBoltGetListFilters(t *testing.T) {
-
 	ts := int(time.Now().Unix()) - 10
 	s, err := NewBoltDBStorage(fmt.Sprintf("./test-%d.db", ts))
-	defer s.Cleanup()
 	if err != nil {
 		t.Errorf("no good: %s", err)
 		return
 	}
-	defer s.Close()
+	defer s.Cleanup()
 
 	s.Add(Annotation{CreatedAt: ts, Message: "Test message", Tags: []string{"tag1"}})
 	s.Add(Annotation{CreatedAt: ts - 5, Message: "Test message", Tags: []string{"tag1"}})
@@ -132,5 +126,27 @@ func TestBoltGetListFilters(t *testing.T) {
 	list, err = s.Posts([]string{"tag1", "tag2"}, 1000, ts-4)
 	if err != nil || len(list.Posts) != 4 {
 		t.Errorf("no good, wrong count, list: %#v, err: %s", list, err)
+	}
+}
+
+func TestBoltTagStats(t *testing.T) {
+	ts := int(time.Now().Unix())
+	s, err := NewBoltDBStorage(fmt.Sprintf("./test-%d.db", ts))
+	defer s.Cleanup()
+	if err != nil {
+		t.Errorf("no good: %s", err)
+		return
+	}
+
+	statsPre, _ := s.TagStats()
+
+	s.Add(Annotation{CreatedAt: ts, Message: "Test message", Tags: []string{"tag1", "tag2"}})
+	s.Add(Annotation{CreatedAt: ts, Message: "Test message", Tags: []string{"tag2", "tag3"}})
+
+	statsPost, _ := s.TagStats()
+
+	if statsPre["tag1"] != statsPost["tag1"]-1 || statsPre["tag2"] != statsPost["tag2"]-2 {
+		t.Errorf("no good, stats counts not as expected")
+		return
 	}
 }
