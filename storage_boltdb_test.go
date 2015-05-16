@@ -52,22 +52,22 @@ func TestBoltGetList(t *testing.T) {
 		t.Errorf("no good, wrong count %d", c)
 	}
 
-	list, err := s.Posts([]string{"tag1"}, 1000, ts)
+	list, err := GetPosts(s, []string{"tag1"}, 1000, ts)
 	if err != nil || len(list.Posts) != 1 {
 		t.Errorf("no good, wrong count, list: %#v, err: %s", list, err)
 	}
 
-	list, err = s.Posts([]string{"tag2"}, 1000, ts)
+	list, err = GetPosts(s, []string{"tag2"}, 1000, ts)
 	if err != nil || len(list.Posts) != 2 {
 		t.Errorf("no good, wrong count, list: %#v, err: %s", list, err)
 	}
 
-	list, err = s.Posts([]string{"tag1", "tag2"}, 1000, ts)
+	list, err = GetPosts(s, []string{"tag1", "tag2"}, 1000, ts)
 	if err != nil || len(list.Posts) != 3 {
 		t.Errorf("no good, wrong count, list: %#v, err: %s", list, err)
 	}
 
-	list, err = s.Posts([]string{"tag123"}, 1000, ts)
+	list, err = GetPosts(s, []string{"tag123"}, 1000, ts)
 	if err != nil || len(list.Posts) != 0 {
 		t.Errorf("no good, wrong count, list: %#v, err: %s", list, err)
 	}
@@ -98,32 +98,32 @@ func TestBoltGetListFilters(t *testing.T) {
 		t.Errorf("no good, wrong count %d", c)
 	}
 
-	list, err := s.Posts([]string{"tag1"}, 1000, ts)
+	list, err := GetPosts(s, []string{"tag1"}, 1000, ts)
 	if err != nil || len(list.Posts) != 3 {
 		t.Errorf("no good, wrong count, list: %#v, err: %s", list, err)
 	}
 
-	list, err = s.Posts([]string{"tag1"}, 1000, ts-4)
+	list, err = GetPosts(s, []string{"tag1"}, 1000, ts-4)
 	if err != nil || len(list.Posts) != 2 {
 		t.Errorf("no good, wrong count, list: %#v, err: %s", list, err)
 	}
 
-	list, err = s.Posts([]string{"tag1"}, 1000, ts-9)
+	list, err = GetPosts(s, []string{"tag1"}, 1000, ts-9)
 	if err != nil || len(list.Posts) != 1 {
 		t.Errorf("no good, wrong count, list: %#v, err: %s", list, err)
 	}
 
-	list, err = s.Posts([]string{"tag1"}, 1000, ts-11)
+	list, err = GetPosts(s, []string{"tag1"}, 1000, ts-11)
 	if err != nil || len(list.Posts) != 0 {
 		t.Errorf("no good, wrong count, list: %#v, err: %s", list, err)
 	}
 
-	list, err = s.Posts([]string{"tag1", "tag2"}, 1000, ts)
+	list, err = GetPosts(s, []string{"tag1", "tag2"}, 1000, ts)
 	if err != nil || len(list.Posts) != 6 {
 		t.Errorf("no good, wrong count, list: %#v, err: %s", list, err)
 	}
 
-	list, err = s.Posts([]string{"tag1", "tag2"}, 1000, ts-4)
+	list, err = GetPosts(s, []string{"tag1", "tag2"}, 1000, ts-4)
 	if err != nil || len(list.Posts) != 4 {
 		t.Errorf("no good, wrong count, list: %#v, err: %s", list, err)
 	}

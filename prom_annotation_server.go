@@ -20,7 +20,7 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 )
 
-const VERSION = "0.3"
+const VERSION = "0.4"
 
 var (
 	/*
@@ -71,7 +71,7 @@ func (s *ServerContext) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 	case *metricsEndpoint:
 		prometheus.Handler().ServeHTTP(w, req)
 	case *annoEndpoint:
-		prometheus.InstrumentHandlerFunc("annotations", s.annotations)(w, req)
+		prometheus.InstrumentHandlerFunc(*annoEndpoint, s.annotations)(w, req)
 	default:
 		http.Error(w, "Not found", 404)
 	}
@@ -87,7 +87,7 @@ func (s *ServerContext) Collect(ch chan<- prometheus.Metric) {
 
 	stats, err := s.storage.TagStats()
 	if err != nil {
-		log.Printf("stats err: %s")
+		log.Printf("stats err: %s", err)
 		return
 	}
 
@@ -96,9 +96,9 @@ func (s *ServerContext) Collect(ch chan<- prometheus.Metric) {
 	}
 }
 
-func (s *ServerContext) writeJSON(w http.ResponseWriter, code int, data interface{}) {
-	w.WriteHeader(code)
+func writeJSON(w http.ResponseWriter, code int, data interface{}) {
 	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(code)
 	temp, _ := json.Marshal(data)
 	fmt.Fprintln(w, string(temp))
 }
@@ -129,36 +129,43 @@ func (s *ServerContext) put(w http.ResponseWriter, req *http.Request) {
 		}
 
 		if err := s.storage.Add(a); err == nil {
-			s.writeJSON(w, 200, map[string]string{"result": "ok"})
+			writeJSON(w, 200, map[string]string{"result": "ok"})
 			return
 		}
 	}
 
 	log.Printf("unmarshal annotion error or mad bad data: %s", body)
-	s.writeJSON(w, 500, map[string]string{"result": "invalid_json"})
+	writeJSON(w, 500, map[string]string{"result": "invalid_json"})
 }
 
 func (s *ServerContext) get(w http.ResponseWriter, req *http.Request) {
 	req.ParseForm()
+	var err error
+	var tags []string
+	var r, until int
 
-	r, err := strconv.Atoi(req.Form.Get("range"))
-	if err != nil || r == 0 {
-		r = 3600
+	all := req.Form.Get("all")
+	if all != "" {
+		tags = s.storage.AllTags()
+		r = int(time.Now().Unix())
+	} else {
+		r, _ = strconv.Atoi(req.Form.Get("range"))
+		if r == 0 {
+			r = 3600
+		}
+		until, _ = strconv.Atoi(req.Form.Get("until"))
+		tags, _ = req.Form["tags[]"]
 	}
-
-	until, err := strconv.Atoi(req.Form.Get("until"))
-	if err != nil || until == 0 {
+	if until == 0 {
 		until = int(time.Now().Unix())
 	}
-	tags, _ := req.Form["tags[]"]
-
-	list, err := s.storage.Posts(tags, r, until)
+	list, err := GetPosts(s.storage, tags, r, until)
 	if err != nil {
-		s.writeJSON(w, 500, map[string]string{"result": fmt.Sprintf("err: %s", err)})
+		writeJSON(w, 500, map[string]string{"result": fmt.Sprintf("err: %s", err)})
 		return
 	}
 
-	s.writeJSON(w, 200, list)
+	writeJSON(w, 200, list)
 }
 
 func main() {

@@ -30,9 +30,8 @@ func (s *BoltDBStorage) seq() int {
 	return s.seqVal
 }
 
-func (s *BoltDBStorage) TagStats() (TagStats, error) {
-
-	var res TagStats = make(map[string]int)
+func (s *BoltDBStorage) TagStats() (res TagStats, err error) {
+	res = make(map[string]int)
 	s.db.View(func(tx *bolt.Tx) error {
 		tx.ForEach(func(name []byte, b *bolt.Bucket) error {
 			stats := b.Stats()
@@ -43,6 +42,19 @@ func (s *BoltDBStorage) TagStats() (TagStats, error) {
 	})
 
 	return res, nil
+}
+
+func (s *BoltDBStorage) AllTags() (res []string) {
+	res = []string{}
+	s.db.View(func(tx *bolt.Tx) error {
+		tx.ForEach(func(name []byte, b *bolt.Bucket) error {
+			res = append(res, string(name))
+			return nil
+		})
+		return nil
+	})
+
+	return res
 }
 
 func (s *BoltDBStorage) Add(a Annotation) error {
@@ -67,29 +79,15 @@ func (s *BoltDBStorage) Add(a Annotation) error {
 }
 
 func (s *BoltDBStorage) GetCount(tag string) (count int) {
-
 	s.db.View(func(tx *bolt.Tx) (err error) {
 		b := tx.Bucket([]byte(tag))
 		if b == nil {
 			return
 		}
-
-		s := b.Stats()
-		count = s.KeyN
+		count = b.Stats().KeyN
 		return
 	})
-
 	return
-}
-
-func (s *BoltDBStorage) Posts(tags []string, r, until int) (res Posts, err error) {
-	res.Posts = make([]Annotation, 0)
-	for _, tag := range tags {
-		if s.ListForTag(tag, r, until, &res.Posts) != nil {
-			return res, err
-		}
-	}
-	return res, nil
 }
 
 func (s *BoltDBStorage) ListForTag(tag string, r, until int, out *[]Annotation) (err error) {
@@ -98,20 +96,18 @@ func (s *BoltDBStorage) ListForTag(tag string, r, until int, out *[]Annotation) 
 		if b == nil {
 			return nil
 		}
-		c := b.Cursor()
 
 		start := []byte(time.Unix(int64(until-r), 0).Format(time.RFC3339))
 		end := []byte(time.Unix(int64(until), 0).Format(time.RFC3339))
 
+		c := b.Cursor()
 		for k, v := c.Seek(start); k != nil && bytes.Compare(k[:len(end)], end) <= 0; k, v = c.Next() {
 			var a Annotation
 			if err := json.Unmarshal(v, &a); err != nil {
 				return err
 			}
-
-			*out = append(*out, Annotation{CreatedAt: a.CreatedAt * 1000, Message: a.Message})
+			*out = append(*out, Annotation{CreatedAt: a.CreatedAt * 1000, Message: a.Message, Tags: []string{tag}})
 		}
-
 		return nil
 	})
 	return

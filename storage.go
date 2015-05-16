@@ -1,6 +1,7 @@
 package main
 
 import (
+	"log"
 	"errors"
 	"fmt"
 	"strings"
@@ -10,16 +11,17 @@ type TagStats map[string]int
 
 type Storage interface {
 	Add(a Annotation) error
-	Posts(tagsFilter []string, r, until int) (res Posts, err error)
+	ListForTag(tag string, r, until int, out *[]Annotation) (err error)
 	TagStats() (TagStats, error)
+	AllTags() []string
 	Close()
 	Cleanup() // after tests
 }
 
 type Annotation struct {
-	CreatedAt int      `json:"created_at,omitempty"`
-	Message   string   `json:"message"                binding:"required"`
-	Tags      []string `json:"tags,omitempty"         binding:"required"`
+	CreatedAt int      `json:"created_at,omitempty"   gorethink:"created_at"`
+	Message   string   `json:"message"                gorethink:"message"`
+	Tags      []string `json:"tags,omitempty"         gorethink:"tags"`
 }
 
 type Posts struct {
@@ -27,6 +29,8 @@ type Posts struct {
 }
 
 func NewStorage(config string) (Storage, error) {
+    log.Printf("Storage config: %s", config)
+    
 	parts := strings.SplitN(config, ":", 2)
 	if len(parts) != 2 {
 		return nil, errors.New("invalid config format")
@@ -43,4 +47,14 @@ func NewStorage(config string) (Storage, error) {
 		}
 	}
 	return nil, fmt.Errorf("invalid config, type \"%s\" not supported", parts[0])
+}
+
+func GetPosts(s Storage, tags []string, ra, until int) (res Posts, err error) {
+	res.Posts = make([]Annotation, 0)
+	for _, tag := range tags {
+		if s.ListForTag(tag, ra, until, &res.Posts) != nil {
+			return res, err
+		}
+	}
+	return res, nil
 }
